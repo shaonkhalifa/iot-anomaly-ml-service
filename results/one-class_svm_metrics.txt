@@ -1,0 +1,19 @@
+Model: One-Class SVM
+Accuracy:  0.9224
+Precision: 0.3167
+Recall:    0.4766
+F1 Score:  0.3805
+
+Confusion Matrix:
+  TN=89858  FP=5142
+  FN=2617  TP=2383
+
+Classification Report:
+              precision    recall  f1-score   support
+
+      Normal       0.97      0.95      0.96     95000
+     Anomaly       0.32      0.48      0.38      5000
+
+    accuracy                           0.92    100000
+   macro avg       0.64      0.71      0.67    100000
+weighted avg       0.94      0.92      0.93    100000

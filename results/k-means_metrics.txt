@@ -1,0 +1,19 @@
+Model: K-Means
+Accuracy:  0.9265
+Precision: 0.3312
+Recall:    0.4618
+F1 Score:  0.3858
+
+Confusion Matrix:
+  TN=90338  FP=4662
+  FN=2691  TP=2309
+
+Classification Report:
+              precision    recall  f1-score   support
+
+      Normal       0.97      0.95      0.96     95000
+     Anomaly       0.33      0.46      0.39      5000
+
+    accuracy                           0.93    100000
+   macro avg       0.65      0.71      0.67    100000
+weighted avg       0.94      0.93      0.93    100000

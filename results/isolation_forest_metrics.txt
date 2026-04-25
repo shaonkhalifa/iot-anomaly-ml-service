@@ -1,0 +1,19 @@
+Model: Isolation Forest
+Accuracy:  0.9281
+Precision: 0.3446
+Recall:    0.4858
+F1 Score:  0.4032
+
+Confusion Matrix:
+  TN=90380  FP=4620
+  FN=2571  TP=2429
+
+Classification Report:
+              precision    recall  f1-score   support
+
+      Normal       0.97      0.95      0.96     95000
+     Anomaly       0.34      0.49      0.40      5000
+
+    accuracy                           0.93    100000
+   macro avg       0.66      0.72      0.68    100000
+weighted avg       0.94      0.93      0.93    100000

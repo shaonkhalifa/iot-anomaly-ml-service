@@ -40,6 +40,13 @@ MODEL_FILES = {
     "kmeans":           "kmeans.pkl",
 }
 
+# ── Columns to attach from original data to prediction results ────────────────
+RETURN_COLS = [
+    "LogTime", "ServerTime", "LogIntValue", "LogFloatValue",
+    "RmsStationId", "NodeId", "log_hour", "time_delay_sec",
+]
+
+
 # ── Dispatcher ───────────────────────────────────────────────────────────────
 def _run_model(model_name: str, X: np.ndarray) -> dict:
     """Route to the correct model's predict function."""
@@ -65,6 +72,10 @@ def _make_json_safe(obj):
         return float(obj)
     if isinstance(obj, (np.ndarray,)):
         return obj.tolist()
+    if isinstance(obj, (np.bool_,)):
+        return bool(obj)
+    if isinstance(obj, pd.Timestamp):
+        return str(obj)
     return obj
 
 
@@ -80,15 +91,19 @@ def _build_predictions(result: dict, original_df: pd.DataFrame | None = None) ->
             "label":      int(label),
             "score":      round(float(score), 6),
         }
-        # Attach original sensor values if available
+        # Attach original IoT event log values if available
         if original_df is not None and i < len(original_df):
-            for col in ["timestamp", "temperature", "humidity", "sensor_id"]:
+            for col in RETURN_COLS:
                 if col in original_df.columns:
                     val = original_df.iloc[i][col]
-                    row[col] = str(val) if col == "timestamp" else (
-                        None if pd.isna(val) else round(float(val), 4)
-                        if isinstance(val, float) else val
-                    )
+                    if pd.isna(val):
+                        row[col] = None
+                    elif isinstance(val, (pd.Timestamp,)):
+                        row[col] = str(val)
+                    elif isinstance(val, float):
+                        row[col] = round(val, 4)
+                    else:
+                        row[col] = _make_json_safe(val)
         out.append(row)
     return out
 
@@ -127,8 +142,14 @@ def predict():
     {
         "model": "isolation_forest",
         "data": [
-            {"temperature": 23.5, "humidity": 65.2},
-            {"temperature": 99.9, "humidity": 12.0}
+            {
+                "LogIntValue": 0,
+                "LogFloatValue": 32.83,
+                "LogTime": "2026-01-02 10:40:02",
+                "ServerTime": "2026-01-02 10:40:06",
+                "LogTypeID": 4,
+                "LogSubTypeID": 1
+            }
         ]
     }
     """
@@ -187,7 +208,7 @@ def predict_batch():
         if not file.filename.endswith(".csv"):
             return jsonify({"error": "Only CSV files are supported"}), 400
 
-        # Save temporarily and run 9-stage cleaning + preprocessing
+        # Save temporarily and run cleaning + preprocessing
         tmp_path = os.path.join(SAVED_MODELS_DIR, "..", "data", "processed", "_uploaded.csv")
         os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
         file.save(tmp_path)
