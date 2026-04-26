@@ -20,9 +20,10 @@ Flask API for display in the Angular UI.
 """
 
 import os
-import numpy as np
 import pandas as pd
+import numpy as np
 import joblib
+import json
 from sklearn.preprocessing import StandardScaler
 
 
@@ -46,13 +47,13 @@ SCALER_PATH    = os.path.join(os.path.dirname(__file__), "..", "saved_models", "
 #  PUBLIC API
 # ════════════════════════════════════════════════════════════════════════════
 
-def load_and_preprocess(csv_path: str, fit_scaler: bool = True, verbose: bool = True):
+def load_and_preprocess(file_path: str, fit_scaler: bool = True, verbose: bool = True):
     """
-    Full preprocessing + cleaning pipeline for a CSV file.
+    Full preprocessing + cleaning pipeline for a CSV or Excel file.
 
     Parameters
     ----------
-    csv_path   : path to the raw CSV file
+    file_path  : path to the raw CSV or Excel file
     fit_scaler : True during training (fits & saves scaler), False for inference
     verbose    : print the cleaning report to console
 
@@ -66,7 +67,10 @@ def load_and_preprocess(csv_path: str, fit_scaler: bool = True, verbose: bool = 
     report = {}
 
     # ── Stage 1: Load ────────────────────────────────────────────────────
-    df = pd.read_csv(csv_path)
+    if file_path.lower().endswith(('.xlsx', '.xls')):
+        df = pd.read_excel(file_path)
+    else:
+        df = pd.read_csv(file_path)
     report["raw_rows"] = len(df)
     report["raw_cols"] = list(df.columns)
     _section("Stage 1: Load", verbose)
@@ -100,12 +104,30 @@ def load_and_preprocess(csv_path: str, fit_scaler: bool = True, verbose: bool = 
         X_scaled = scaler.fit_transform(X)
         os.makedirs(os.path.dirname(SCALER_PATH), exist_ok=True)
         joblib.dump(scaler, SCALER_PATH)
+        
+        # Save feature columns
+        features_path = os.path.join(os.path.dirname(SCALER_PATH), "features.json")
+        with open(features_path, "w") as f:
+            json.dump(model_features, f)
+            
         _section("Stage 6: Scale", verbose)
         _log(f"StandardScaler fitted and saved -> {len(model_features)} features", verbose)
     else:
         if os.path.exists(SCALER_PATH):
-            scaler   = joblib.load(SCALER_PATH)
-            X_scaled = scaler.transform(X)
+            scaler = joblib.load(SCALER_PATH)
+            features_path = os.path.join(os.path.dirname(SCALER_PATH), "features.json")
+            
+            if os.path.exists(features_path):
+                with open(features_path, "r") as f:
+                    expected_cols = json.load(f)
+                X_aligned = df[model_features].reindex(columns=expected_cols, fill_value=0)
+                X_scaled = scaler.transform(X_aligned.values.astype(np.float64))
+            elif hasattr(scaler, "feature_names_in_"):
+                expected_cols = list(scaler.feature_names_in_)
+                X_aligned = df[model_features].reindex(columns=expected_cols, fill_value=0)
+                X_scaled = scaler.transform(X_aligned.values.astype(np.float64))
+            else:
+                X_scaled = scaler.transform(X)
         else:
             scaler   = StandardScaler()
             X_scaled = scaler.fit_transform(X)
@@ -172,12 +194,23 @@ def preprocess_records(records: list, verbose: bool = False) -> np.ndarray:
 
     if os.path.exists(SCALER_PATH):
         scaler = joblib.load(SCALER_PATH)
-        # Handle feature count mismatch: pad or trim
-        expected = scaler.n_features_in_
-        if X.shape[1] < expected:
-            X = np.hstack([X, np.zeros((X.shape[0], expected - X.shape[1]))])
-        elif X.shape[1] > expected:
-            X = X[:, :expected]
+        features_path = os.path.join(os.path.dirname(SCALER_PATH), "features.json")
+        
+        if os.path.exists(features_path):
+            with open(features_path, "r") as f:
+                expected_cols = json.load(f)
+            X_aligned = df[model_features].reindex(columns=expected_cols, fill_value=0)
+            return scaler.transform(X_aligned.values.astype(np.float64))
+        elif hasattr(scaler, "feature_names_in_"):
+            expected_cols = list(scaler.feature_names_in_)
+            X_aligned = df[model_features].reindex(columns=expected_cols, fill_value=0)
+            return scaler.transform(X_aligned.values.astype(np.float64))
+        elif hasattr(scaler, "n_features_in_"):
+            expected = scaler.n_features_in_
+            if X.shape[1] < expected:
+                X = np.hstack([X, np.zeros((X.shape[0], expected - X.shape[1]))])
+            elif X.shape[1] > expected:
+                X = X[:, :expected]
         return scaler.transform(X)
     else:
         scaler = StandardScaler()

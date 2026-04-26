@@ -44,8 +44,8 @@ MODEL_FILES = {
 RETURN_COLS = [
     "LogTime", "ServerTime", "LogIntValue", "LogFloatValue",
     "RmsStationId", "NodeId", "log_hour", "time_delay_sec",
+    "LogTypeID", "LogSubTypeID"
 ]
-
 
 # ── Dispatcher ───────────────────────────────────────────────────────────────
 def _run_model(model_name: str, X: np.ndarray) -> dict:
@@ -79,6 +79,19 @@ def _make_json_safe(obj):
     return obj
 
 
+def _extract_id_from_onehot(df_row, prefix: str) -> int:
+    """Extract LogTypeID or LogSubTypeID from one-hot columns like LogType_4."""
+    for col in df_row.index:
+        if col.startswith(prefix):
+            val = df_row[col]
+            if val == 1 or val == 1.0 or val is True or str(val).strip().lower() in ['1', 'true']:
+                try:
+                    return int(col.replace(prefix, ""))
+                except ValueError:
+                    pass
+    return 0
+
+
 def _build_predictions(result: dict, original_df: pd.DataFrame | None = None) -> list:
     """Convert raw arrays into a list of readable prediction dicts."""
     out = []
@@ -93,9 +106,10 @@ def _build_predictions(result: dict, original_df: pd.DataFrame | None = None) ->
         }
         # Attach original IoT event log values if available
         if original_df is not None and i < len(original_df):
+            df_row = original_df.iloc[i]
             for col in RETURN_COLS:
                 if col in original_df.columns:
-                    val = original_df.iloc[i][col]
+                    val = df_row[col]
                     if pd.isna(val):
                         row[col] = None
                     elif isinstance(val, (pd.Timestamp,)):
@@ -104,6 +118,12 @@ def _build_predictions(result: dict, original_df: pd.DataFrame | None = None) ->
                         row[col] = round(val, 4)
                     else:
                         row[col] = _make_json_safe(val)
+                else:
+                    # Dynamically reconstruct LogTypeID / LogSubTypeID if missing but one-hot encoded
+                    if col == "LogTypeID":
+                        row[col] = _extract_id_from_onehot(df_row, "LogType_")
+                    elif col == "LogSubTypeID":
+                        row[col] = _extract_id_from_onehot(df_row, "LogSubType_")
         out.append(row)
     return out
 
@@ -205,11 +225,12 @@ def predict_batch():
         file       = request.files["file"]
         model_name = request.form.get("model", "isolation_forest")
 
-        if not file.filename.endswith(".csv"):
-            return jsonify({"error": "Only CSV files are supported"}), 400
+        if not file.filename.endswith((".csv", ".xlsx", ".xls")):
+            return jsonify({"error": "Only CSV and Excel files are supported"}), 400
 
         # Save temporarily and run cleaning + preprocessing
-        tmp_path = os.path.join(SAVED_MODELS_DIR, "..", "data", "processed", "_uploaded.csv")
+        ext = os.path.splitext(file.filename)[1]
+        tmp_path = os.path.join(SAVED_MODELS_DIR, "..", "data", "processed", f"_uploaded{ext}")
         os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
         file.save(tmp_path)
 
@@ -244,6 +265,47 @@ def predict_batch():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/predict/batch/compare", methods=["POST"])
+def predict_batch_compare():
+    """
+    Run all 3 models on the uploaded CSV/Excel file.
+    Form fields:
+        file: CSV/Excel file (required)
+    """
+    try:
+        if "file" not in request.files:
+            return jsonify({"error": "No file uploaded. Use form-data key 'file'"}), 400
+
+        file = request.files["file"]
+
+        if not file.filename.endswith((".csv", ".xlsx", ".xls")):
+            return jsonify({"error": "Only CSV and Excel files are supported"}), 400
+
+        # Save temporarily and run cleaning + preprocessing
+        ext = os.path.splitext(file.filename)[1]
+        tmp_path = os.path.join(SAVED_MODELS_DIR, "..", "data", "processed", f"_uploaded_compare{ext}")
+        os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
+        file.save(tmp_path)
+
+        df, X_scaled, _, _ = load_and_preprocess(tmp_path, fit_scaler=False, verbose=False)
+
+        comparison = {}
+        for model_name in MODEL_FILES:
+            result    = _run_model(model_name, X_scaled)
+            n_anomaly = int((result["labels"] == -1).sum())
+            comparison[model_name] = {
+                "anomaly_count":  n_anomaly,
+                "normal_count":   int((result["labels"] == 1).sum()),
+                "anomaly_pct":    round(n_anomaly / len(df) * 100, 2),
+                "score_mean":     round(float(np.mean(result["scores"])), 4),
+            }
+
+        return jsonify({"total_records": len(df), "comparison": comparison})
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/predict/compare", methods=["POST"])
 def predict_compare():
     """
@@ -269,7 +331,6 @@ def predict_compare():
                 "normal_count":   int((result["labels"] == 1).sum()),
                 "anomaly_pct":    round(n_anomaly / len(records) * 100, 2),
                 "score_mean":     round(float(np.mean(result["scores"])), 4),
-                "predictions":    _build_predictions(result, df),
             }
 
         return jsonify({"total_records": len(records), "comparison": comparison})
