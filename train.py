@@ -38,10 +38,11 @@ from app.evaluation import (
 )
 
 # ── Default data paths ────────────────────────────────────────────────────────
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 if 'COLAB_GPU' in os.environ:
     DATA_DIR = "/content/drive/MyDrive/data"
 else:
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     DATA_DIR = os.path.join(BASE_DIR, "..", "data")
 
 DEFAULT_TRAIN = os.path.join(DATA_DIR, "train_data.csv")
