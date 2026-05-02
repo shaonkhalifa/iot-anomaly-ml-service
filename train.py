@@ -51,16 +51,11 @@ DEFAULT_LIVE  = os.path.join(DATA_DIR, "live_data.csv")
 
 
 def main(train_path: str, test_path: str, live_path: str):
-    print("\n" + "=" * 65)
-    print("  IoT Anomaly Detection - Training Pipeline")
-    print("  (Hierarchical Event-Log Schema)")
-    print("=" * 65)
 
     # ═══════════════════════════════════════════════════════════════════════
     # PHASE 1:  TRAIN  (unsupervised — true_label is NaN / not used)
     # ═══════════════════════════════════════════════════════════════════════
-    print(f"\n[1/5] Loading & preprocessing TRAINING data:")
-    print(f"      {train_path}")
+
 
     if not os.path.exists(train_path):
         print(f"\n[!] Training data not found at: {train_path}")
@@ -70,16 +65,12 @@ def main(train_path: str, test_path: str, live_path: str):
     df_train, X_train, scaler, train_report = load_and_preprocess(
         train_path, fit_scaler=True, verbose=True
     )
-    print(f"\n      Clean rows : {train_report.get('final_rows')} / {train_report.get('raw_rows')}")
-    print(f"      Removed    : {train_report.get('rows_removed', 0)} rows")
-    print(f"      Features   : {X_train.shape[1]}")
+
 
     # ═══════════════════════════════════════════════════════════════════════
     # PHASE 2:  TRAIN MODELS
     # ═══════════════════════════════════════════════════════════════════════
-    print("\n[2/5] Training models …")
 
-    print("  Training Isolation Forest …")
     if_model = isolation_forest.train(X_train, contamination=0.05)
 
     print("  Training One-Class SVM …")
@@ -95,20 +86,16 @@ def main(train_path: str, test_path: str, live_path: str):
         X_train_oc = X_train
     oc_model = one_class_svm.train(X_train_oc, nu=0.05)
 
-    print("  Training K-Means …")
     km_model, km_threshold = kmeans.train(X_train, n_clusters=3)
 
     # ═══════════════════════════════════════════════════════════════════════
     # PHASE 3:  EVALUATE ON TEST SET  (has true_label)
     # ═══════════════════════════════════════════════════════════════════════
-    print(f"\n[3/5] Evaluating on TEST data:")
-    print(f"      {test_path}")
 
     if os.path.exists(test_path):
         df_test, X_test, _, test_report = load_and_preprocess(
             test_path, fit_scaler=False, verbose=False
         )
-        print(f"      Test rows: {len(df_test)}")
 
         # Extract ground truth labels (0=normal, 1=anomaly)
         y_true = None
@@ -118,7 +105,7 @@ def main(train_path: str, test_path: str, live_path: str):
             y_true = np.where(y_true_raw == 1, -1, 1)
             n_anom_true = int((y_true == -1).sum())
             n_norm_true = int((y_true == 1).sum())
-            print(f"      Ground truth: {n_norm_true} normal, {n_anom_true} anomaly")
+        
 
         # Run predictions on test set
         if_test = isolation_forest.predict(X_test)
@@ -169,15 +156,13 @@ def main(train_path: str, test_path: str, live_path: str):
     # ═══════════════════════════════════════════════════════════════════════
     # PHASE 4:  LIVE DATA DEMO
     # ═══════════════════════════════════════════════════════════════════════
-    print(f"\n[4/5] Live data demo:")
-    print(f"      {live_path}")
 
     if os.path.exists(live_path):
         df_live, X_live, _, live_report = load_and_preprocess(
             live_path, fit_scaler=False, verbose=False
         )
+        
         print(f"      Live rows: {len(df_live)}")
-
         if_live = isolation_forest.predict(X_live)
         n_anom = int((if_live["labels"] == -1).sum())
         print(f"      Isolation Forest live anomalies: {n_anom} / {len(df_live)} "

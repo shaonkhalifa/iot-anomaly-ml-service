@@ -44,7 +44,7 @@ MODEL_FILES = {
 RETURN_COLS = [
     "LogTime", "ServerTime", "LogIntValue", "LogFloatValue",
     "RmsStationId", "NodeId", "log_hour", "time_delay_sec",
-    "LogTypeID", "LogSubTypeID"
+    "LogType", "LogSubType"
 ]
 
 # ── Dispatcher ───────────────────────────────────────────────────────────────
@@ -123,7 +123,7 @@ def _build_predictions(result: dict, original_df: pd.DataFrame | None = None) ->
                         if col == "LogTime" and val > pd.Timestamp(now):
                             warnings.append(f"Future timestamp detected ({val.strftime('%Y-%m-%d %H:%M')})")
                     # Explicitly cast known integer columns to avoid float serialization (e.g., 10.0 -> 10)
-                    elif col in ["log_hour", "RmsStationId", "LogTypeID", "LogSubTypeID"]:
+                    elif col in ["log_hour", "RmsStationId", "LogType", "LogSubType"]:
                         try:
                             row[col] = int(val)
                         except:
@@ -134,9 +134,9 @@ def _build_predictions(result: dict, original_df: pd.DataFrame | None = None) ->
                         row[col] = _make_json_safe(val)
                 else:
                     # Dynamically reconstruct LogTypeID / LogSubTypeID if missing but one-hot encoded
-                    if col == "LogTypeID":
+                    if col == "LogType":
                         row[col] = int(_extract_id_from_onehot(df_row, "LogType_"))
-                    elif col == "LogSubTypeID":
+                    elif col == "LogSubType":
                         row[col] = int(_extract_id_from_onehot(df_row, "LogSubType_"))
 
             # Check IQR flags (only LogFloatValue is meaningful)
