@@ -1,0 +1,54 @@
+{
+  "LogIntValue": {
+    "LogType_1": {
+      "lower": -1.0,
+      "upper": 6.0
+    },
+    "LogType_2": {
+      "lower": -6.0,
+      "upper": 8.0
+    },
+    "LogType_4": {
+      "lower": 0.0,
+      "upper": 0.0
+    },
+    "LogType_5": {
+      "lower": 0.0,
+      "upper": 0.0
+    },
+    "LogType_6": {
+      "lower": 0.0,
+      "upper": 0.0
+    },
+    "_global": {
+      "lower": 0.0,
+      "upper": 0.0
+    }
+  },
+  "LogFloatValue": {
+    "LogType_1": {
+      "lower": 0.0,
+      "upper": 0.0
+    },
+    "LogType_2": {
+      "lower": -3511.501,
+      "upper": 4682.015
+    },
+    "LogType_4": {
+      "lower": 7.7944,
+      "upper": 45.2571
+    },
+    "LogType_5": {
+      "lower": 1.6637,
+      "upper": 98.702
+    },
+    "LogType_6": {
+      "lower": 52.0959,
+      "upper": 55.6515
+    },
+    "_global": {
+      "lower": -162.0591,
+      "upper": 216.1011
+    }
+  }
+}

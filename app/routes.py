@@ -94,6 +94,9 @@ def _extract_id_from_onehot(df_row, prefix: str) -> int:
 
 def _build_predictions(result: dict, original_df: pd.DataFrame | None = None) -> list:
     """Convert raw arrays into a list of readable prediction dicts."""
+    from datetime import datetime
+    now = datetime.now()
+
     out = []
     for i, (label, score, readable) in enumerate(
         zip(result["labels"], result["scores"], result["readable"])
@@ -104,6 +107,8 @@ def _build_predictions(result: dict, original_df: pd.DataFrame | None = None) ->
             "label":      int(label),
             "score":      round(float(score), 6),
         }
+        warnings = []
+
         # Attach original IoT event log values if available
         if original_df is not None and i < len(original_df):
             df_row = original_df.iloc[i]
@@ -114,16 +119,32 @@ def _build_predictions(result: dict, original_df: pd.DataFrame | None = None) ->
                         row[col] = None
                     elif isinstance(val, (pd.Timestamp,)):
                         row[col] = str(val)
-                    elif isinstance(val, float):
-                        row[col] = round(val, 4)
+                        # Check for future timestamps
+                        if col == "LogTime" and val > pd.Timestamp(now):
+                            warnings.append(f"Future timestamp detected ({val.strftime('%Y-%m-%d %H:%M')})")
+                    # Explicitly cast known integer columns to avoid float serialization (e.g., 10.0 -> 10)
+                    elif col in ["log_hour", "RmsStationId", "LogTypeID", "LogSubTypeID"]:
+                        try:
+                            row[col] = int(val)
+                        except:
+                            row[col] = None
+                    elif isinstance(val, (float, np.floating)):
+                        row[col] = round(float(val), 4)
                     else:
                         row[col] = _make_json_safe(val)
                 else:
                     # Dynamically reconstruct LogTypeID / LogSubTypeID if missing but one-hot encoded
                     if col == "LogTypeID":
-                        row[col] = _extract_id_from_onehot(df_row, "LogType_")
+                        row[col] = int(_extract_id_from_onehot(df_row, "LogType_"))
                     elif col == "LogSubTypeID":
-                        row[col] = _extract_id_from_onehot(df_row, "LogSubType_")
+                        row[col] = int(_extract_id_from_onehot(df_row, "LogSubType_"))
+
+            # Check IQR flags (only LogFloatValue is meaningful)
+            if "flag_iqr_LogFloatValue" in original_df.columns and df_row.get("flag_iqr_LogFloatValue", 0) == 1:
+                float_val = df_row.get("LogFloatValue", "?")
+                warnings.append(f"LogFloatValue ({float_val}) is outside IQR range for this sensor type")
+
+        row["warnings"] = warnings
         out.append(row)
     return out
 
@@ -184,8 +205,7 @@ def predict():
         if not records:
             return jsonify({"error": "'data' field is required and must not be empty"}), 400
 
-        df = pd.DataFrame(records)
-        X  = preprocess_records(records)
+        X, df = preprocess_records(records)
         result = _run_model(model_name, X)
 
         n_anomaly = int((result["labels"] == -1).sum())

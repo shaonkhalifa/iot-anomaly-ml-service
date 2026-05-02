@@ -39,8 +39,10 @@ LABEL_COL     = "true_label"
 LOGTYPE_PREFIX    = "LogType_"
 LOGSUBTYPE_PREFIX = "LogSubType_"
 
-IQR_MULTIPLIER = 3.0   # IQR fence multiplier for outlier flagging
+IQR_MULTIPLIER    = 3.0   # IQR fence multiplier for outlier flagging
+IQR_SIGNAL_COLS   = ["LogFloatValue"]  # Only LogFloatValue is meaningful for IQR
 SCALER_PATH    = os.path.join(os.path.dirname(__file__), "..", "saved_models", "scaler.pkl")
+IQR_BOUNDS_PATH = os.path.join(os.path.dirname(__file__), "..", "saved_models", "iqr_bounds.json")
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -91,6 +93,10 @@ def load_and_preprocess(file_path: str, fit_scaler: bool = True, verbose: bool =
     # ── Stage 5: Context-aware IQR outlier flags ─────────────────────────
     df, iqr_stats = _flag_iqr_outliers(df, verbose)
     report.update(iqr_stats)
+
+    # Save IQR bounds during training for real-time inference
+    if fit_scaler and "iqr_outliers" in iqr_stats:
+        _save_iqr_bounds(df, iqr_stats)
 
     # ── Stage 6: Build feature matrix & scale ────────────────────────────
     model_features = _get_model_features(df)
@@ -143,7 +149,7 @@ def load_and_preprocess(file_path: str, fit_scaler: bool = True, verbose: bool =
     return df, X_scaled, scaler, report
 
 
-def preprocess_records(records: list, verbose: bool = False) -> np.ndarray:
+def preprocess_records(records: list, verbose: bool = False) -> tuple:
     """
     Lightweight preprocessing for real-time API inference (list of dicts).
 
@@ -154,7 +160,7 @@ def preprocess_records(records: list, verbose: bool = False) -> np.ndarray:
 
     Returns
     -------
-    X_scaled : numpy array ready for model.predict()
+    (X_scaled, df) : tuple of (numpy array ready for model.predict(), processed DataFrame)
     """
     df = pd.DataFrame(records)
 
@@ -188,6 +194,9 @@ def preprocess_records(records: list, verbose: bool = False) -> np.ndarray:
             df[col] = 0.0
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
+    # ── Apply IQR outlier flags using saved bounds from training ─────────
+    _apply_iqr_flags(df)
+
     # Build feature matrix and scale
     model_features = _get_model_features(df)
     X = df[model_features].fillna(0).values.astype(np.float64)
@@ -200,21 +209,21 @@ def preprocess_records(records: list, verbose: bool = False) -> np.ndarray:
             with open(features_path, "r") as f:
                 expected_cols = json.load(f)
             X_aligned = df[model_features].reindex(columns=expected_cols, fill_value=0)
-            return scaler.transform(X_aligned.values.astype(np.float64))
+            return scaler.transform(X_aligned.values.astype(np.float64)), df
         elif hasattr(scaler, "feature_names_in_"):
             expected_cols = list(scaler.feature_names_in_)
             X_aligned = df[model_features].reindex(columns=expected_cols, fill_value=0)
-            return scaler.transform(X_aligned.values.astype(np.float64))
+            return scaler.transform(X_aligned.values.astype(np.float64)), df
         elif hasattr(scaler, "n_features_in_"):
             expected = scaler.n_features_in_
             if X.shape[1] < expected:
                 X = np.hstack([X, np.zeros((X.shape[0], expected - X.shape[1]))])
             elif X.shape[1] > expected:
                 X = X[:, :expected]
-        return scaler.transform(X)
+        return scaler.transform(X), df
     else:
         scaler = StandardScaler()
-        return scaler.fit_transform(X)
+        return scaler.fit_transform(X), df
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -468,3 +477,97 @@ def _print_summary(report: dict):
     print(f"    Features for model    : {report.get('model_feature_count', '?')}")
     print(f"    Feature list          : {report.get('model_features', [])}")
     print(f"  {'=' * 50}")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  IQR BOUNDS PERSISTENCE
+# ════════════════════════════════════════════════════════════════════════════
+
+def _save_iqr_bounds(df: pd.DataFrame, iqr_stats: dict):
+    """
+    Save per-LogType IQR bounds to disk during training.
+    These bounds are reused in preprocess_records for real-time inference.
+    """
+    bounds = {}
+    # Compute and save per-LogType bounds for each signal column
+    logtype_cols = sorted([c for c in df.columns if c.startswith(LOGTYPE_PREFIX)])
+
+    for signal_col in SIGNAL_COLS:
+        if signal_col not in df.columns:
+            continue
+
+        col_bounds = {}
+
+        if logtype_cols:
+            # Context-aware: compute per-group bounds
+            for lt_col in logtype_cols:
+                group_df = df[df[lt_col] == 1]
+                if len(group_df) < 10:
+                    continue
+                Q1 = float(group_df[signal_col].quantile(0.25))
+                Q3 = float(group_df[signal_col].quantile(0.75))
+                IQR = Q3 - Q1
+                col_bounds[lt_col] = {
+                    "lower": round(Q1 - IQR_MULTIPLIER * IQR, 4),
+                    "upper": round(Q3 + IQR_MULTIPLIER * IQR, 4),
+                }
+
+        # Also save global bounds as fallback
+        Q1 = float(df[signal_col].quantile(0.25))
+        Q3 = float(df[signal_col].quantile(0.75))
+        IQR = Q3 - Q1
+        col_bounds["_global"] = {
+            "lower": round(Q1 - IQR_MULTIPLIER * IQR, 4),
+            "upper": round(Q3 + IQR_MULTIPLIER * IQR, 4),
+        }
+
+        bounds[signal_col] = col_bounds
+
+    os.makedirs(os.path.dirname(IQR_BOUNDS_PATH), exist_ok=True)
+    with open(IQR_BOUNDS_PATH, "w") as f:
+        json.dump(bounds, f, indent=2)
+
+
+def _apply_iqr_flags(df: pd.DataFrame):
+    """
+    Apply IQR outlier flags to a DataFrame using saved bounds from training.
+    Used during real-time JSON inference to match the training feature set.
+    Only LogFloatValue is considered; LogIntValue flag is kept at 0 for model compatibility.
+    """
+    # Always create both flag columns for model feature alignment
+    for col in SIGNAL_COLS:
+        df[f"flag_iqr_{col}"] = 0
+
+    if not os.path.exists(IQR_BOUNDS_PATH):
+        return
+
+    with open(IQR_BOUNDS_PATH, "r") as f:
+        bounds = json.load(f)
+
+    # Only apply IQR to LogFloatValue (LogIntValue is not meaningful for IQR)
+    for signal_col in IQR_SIGNAL_COLS:
+        flag_col = f"flag_iqr_{signal_col}"
+
+        if signal_col not in bounds or signal_col not in df.columns:
+            continue
+
+        col_bounds = bounds[signal_col]
+
+        # Try context-aware matching using one-hot LogType columns
+        logtype_cols = sorted([c for c in df.columns if c.startswith(LOGTYPE_PREFIX)])
+
+        if logtype_cols:
+            for lt_col in logtype_cols:
+                if lt_col in col_bounds:
+                    lo = col_bounds[lt_col]["lower"]
+                    hi = col_bounds[lt_col]["upper"]
+                    mask = (df[lt_col] == 1) & ((df[signal_col] < lo) | (df[signal_col] > hi))
+                    df.loc[mask, flag_col] = 1
+        else:
+            # Fallback to global bounds
+            if "_global" in col_bounds:
+                lo = col_bounds["_global"]["lower"]
+                hi = col_bounds["_global"]["upper"]
+                mask = (df[signal_col] < lo) | (df[signal_col] > hi)
+                df.loc[mask, flag_col] = 1
+
